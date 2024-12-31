@@ -26,8 +26,9 @@ While debugging just these tests it's convenient to use this:
 import os
 import logging
 import unittest
+from unittest.mock import patch
 from decimal import Decimal
-from service.models import Product, Category, db
+from service.models import Product, Category, db, DataValidationError
 from service import app
 from tests.factories import ProductFactory
 
@@ -192,3 +193,88 @@ class TestProductModel(unittest.TestCase):
         self.assertEqual(found.count(), count)
         for product in found:
             self.assertEqual(product.category, category)
+
+    def test_missing_key(self):
+        """Test that missing keys in the data raise DataValidationError"""
+        data = {
+            "description": "A sample product",
+            "price": "100.00",
+            "available": True,
+            "category": "ELECTRONICS"
+        }
+
+        product = Product()
+        with self.assertRaises(DataValidationError) as context:
+            product.deserialize(data)
+
+        self.assertEqual(str(context.exception), "Invalid product: missing name")
+
+    def test_invalid_attribute(self):
+        """Test that an invalid attribute (e.g., a bad category) raises DataValidationError"""
+        data = {
+            "name": "Sample Product",
+            "description": "A sample product",
+            "price": "100.00",
+            "available": True,
+            "category": "INVALID_CATEGORY"  # Invalid category
+        }
+
+        product = Product()
+        with self.assertRaises(DataValidationError) as context:
+            product.deserialize(data)
+
+        self.assertTrue(str(context.exception).startswith("Invalid attribute:"))
+
+    def test_invalid_boolean_type(self):
+        """Test that 'available' is a boolean, otherwise raises DataValidationError"""
+        data = {
+            "name": "Sample Product",
+            "description": "A sample product",
+            "price": "100.00",
+            "available": "yes",  # Invalid type (string instead of boolean)
+            "category": "ELECTRONICS"
+        }
+
+        product = Product()
+        with self.assertRaises(DataValidationError) as context:
+            product.deserialize(data)
+
+        self.assertEqual(str(context.exception), "Invalid type for boolean [available]: <class 'str'>")
+
+    def test_successful_deserialization(self):
+        """Test that a valid product data is successfully deserialized"""
+        data = {
+            "name": "Sample Product",
+            "description": "A sample product",
+            "price": "100.00",
+            "available": True,
+            "category": "AUTOMOTIVE"
+        }
+
+        product = Product()
+        result = product.deserialize(data)
+
+        self.assertEqual(result.name, "Sample Product")
+        self.assertEqual(result.description, "A sample product")
+        self.assertEqual(result.price, Decimal("100.00"))
+        self.assertEqual(result.available, True)
+        self.assertEqual(result.category, Category.AUTOMOTIVE)
+
+    @patch('service.models.db.session.commit')  # Mock the db session.commit method
+    def test_update_with_empty_id(self, mock_commit):
+        """
+        Test that calling `update` with an empty `id` raises a DataValidationError.
+        """
+        # Create a product with no id (empty or None)
+        product = Product()
+        product.name = "Sample Product"
+        product.description = "A sample product"
+        product.price = 100.00
+        product.available = True
+        product.category = "AUTOMOTIVE"
+        # Check that calling update raises the correct error
+        with self.assertRaises(DataValidationError) as context:
+            product.update()
+
+        self.assertEqual(str(context.exception), "Update called with empty ID field")
+        mock_commit.assert_not_called()  # Ensure db.session.commit() was not called
